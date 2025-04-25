@@ -1,0 +1,183 @@
+# === Setup the simulation ===
+
+variable vi equal -10
+
+log log.Al_impact
+
+echo screen
+
+dimension  3
+
+units           metal
+
+atom_style      atomic
+
+boundary p p p
+
+
+
+read_data Fe_29.57Cr_12.71Ni_7.2Co_40.47Al_10.xyz
+
+#plate
+region 11 block INF INF INF INF INF 50.0 units box
+group plate region 11
+
+#outer
+region 12 cylinder z 0 0 215 INF 50.0 units box
+group outer region 12
+
+group extra subtract plate outer
+
+delete_atoms group  extra
+
+region 13 cylinder z 0 0 200 INF 50.0 units box
+group specimen region 13
+
+
+group edge subtract outer specimen
+
+
+region 14 block INF INF INF INF 50.0 INF units box
+group impactor region 14
+
+#hold the edge of the specimen
+
+fix             1 edge setforce 0.0 NULL 0.0
+velocity        edge set 0.0 NULL 0.0 units box
+
+group Fe type 1
+
+group Cr type 2
+
+group Ni type 3
+
+group Co type 4
+
+group Al type 5
+
+group Au type 6
+
+
+# === Define Interatomic Potential ===
+
+pair_style hybrid/overlay eam/alloy eam/alloy morse 2.5
+pair_coeff * * eam/alloy 1 FeNiCrCoAl.eam.alloy Fe Ni Cr Co Al NULL
+pair_coeff * * eam/alloy 2 Au_5T.eam.alloy NULL NULL NULL NULL NULL Au
+pair_coeff 1 6 morse 6.0585 5.11 2.522 2.5
+pair_coeff 2 6 morse 6.0585 5.11 2.522 2.5
+pair_coeff 3 6 morse 6.0585 5.11 2.522 2.5
+pair_coeff 4 6 morse 6.0585 5.11 2.522 2.5
+pair_coeff 5 6 morse 6.0585 5.11 2.522 2.5
+
+# -----------------To get rid of out-of-range-atoms error-----------------
+
+neighbor        3.0 bin
+neigh_modify    delay 0 every 1 check yes
+comm_modify 	 mode multi cutoff/multi * 15.0
+
+#__________________________________________________________________________
+
+compute  1 all stress/atom NULL virial
+compute  2 all reduce sum c_1[1] c_1[2] c_1[3]
+compute  3 all pe/atom
+
+compute 11 impactor displace/atom
+compute 12 impactor ke
+compute 13 impactor pe/atom
+
+compute 21 impactor reduce sum c_11[3]
+compute 22 impactor reduce sum c_13
+
+
+variable ke_impactor equal c_12
+variable pe_impactor equal c_22
+variable dis_impactor equal c_21/180.0
+
+
+
+variable istep equal step
+
+
+variable       Dist_bull_x equal xcm(impactor,x)
+variable       Dist_bull_y equal xcm(impactor,y)
+variable       Dist_bull_z equal xcm(impactor,z)
+variable       Velocity_bull_x equal vcm(impactor,x)
+variable       Velocity_bull_y equal vcm(impactor,y)
+variable       Velocity_bull_z equal vcm(impactor,z)
+
+variable       Force_bull_z equal fcm(impactor,z)
+
+
+# === Run the simulation for equilibration ===
+
+velocity specimen create 300 12345 dist gaussian
+
+min_style cg
+minimize 1e-6 1e-8 10000 100000
+
+thermo  10
+
+thermo_style custom step pe ke etotal temp lx ly lz press atoms
+
+
+
+dump eve all custom 1000 dump.Al_minimize.* id type x y z vx vy vz c_3 
+
+
+
+timestep 0.0005
+
+run 5000
+
+undump eve
+
+# === Run the simulation for equilibration ===
+
+reset_timestep 0
+
+fix nvt specimen nvt temp 300 300 0.05 
+
+
+
+thermo  10
+
+thermo_style custom step pe ke etotal temp lx ly lz press atoms
+
+
+
+dump eve all custom 100 dump.Al_equillibrate.* id type x y z vx vy vz c_3 
+
+
+
+timestep 0.0005
+
+run 25000
+
+unfix nvt
+undump eve
+
+# === Run the simulation for impact ===
+
+reset_timestep 0
+
+fix        5 impactor rigid single
+
+velocity impactor set 0.0 0.0 v_vi sum yes units box   #20 A/ps = 2 km/s
+
+fix nve all nve
+
+variable von atom sqrt((c_1[1]-c_1[2])^2+(c_1[2]-c_1[3])^2+(c_1[3]-c_1[1])^2+6*(c_1[4]^2+c_1[5]^2+c_1[6]^2)/2)
+
+dump eve all custom 100 dump.Al_impact.* id type x y z vx vy vz c_3 v_von
+
+fix 6 all print 100 "${istep} ${Dist_bull_z} ${Velocity_bull_z} ${Force_bull_z}" file bullet_z_v_data.txt screen no
+
+fix data_impactor2 impactor print 100 "${istep} ${pe_impactor} ${ke_impactor}" file output_impactor.txt screen no
+
+
+
+run 150000
+
+
+
+print "Job's done" 
