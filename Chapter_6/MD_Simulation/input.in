@@ -1,0 +1,179 @@
+# Input for graphene sheet
+variable T equal 300
+variable vi equal -10		
+#----------------------Initialization--------------------
+
+units                 metal
+dimension             3
+boundary              p  p  f
+atom_style            atomic
+newton                on
+
+#------------------Atom Definition-----------------------
+# geometry
+
+read_data	 BLG_20_20.xyz
+
+########################################################
+#whole graphene
+region 11 block INF INF INF INF INF 7.0 units box
+group graphene region 11
+
+#left edge
+region   1  block INF 5.0 INF INF INF 7.0 units box
+group left  region 1
+#right edge
+region   2   block 195.0 INF INF INF INF 7.0 units box
+group right  region 2
+
+#bottom edge
+region   3  block INF INF INF 5.0 INF 7.0 units box
+group bottom  region 3
+
+#top edge
+region   4  block INF INF 195.0 INF INF 7.0 units box
+group top  region 4
+
+region 5 block 5.0 195.0 5.0 195.0 INF 7.0 units box
+group sheet region 5
+
+group edge subtract graphene sheet
+
+region 6 block INF INF INF INF 7.0 INF units box
+group impactor region 6
+
+#hold the two ends of the sheet
+
+fix             1 left setforce 0.0 NULL 0.0
+velocity        left set 0.0 NULL 0.0 units box
+
+fix             2 right setforce 0.0 NULL 0.0
+velocity        right set 0.0 NULL 0.0 units box
+
+fix             3 bottom setforce 0.0 NULL 0.0
+velocity        bottom set 0.0 NULL 0.0 units box
+
+fix             4 top setforce 0.0 NULL 0.0
+velocity        top set 0.0 NULL 0.0 units box
+
+
+##---------------- Tersoff----------------------
+
+pair_style hybrid/overlay airebo/morse 3.0 airebo/morse 3.0 tersoff morse 2.5 lj/cut 8.5
+pair_coeff * * airebo/morse 1 CH.airebo-m C NULL NULL
+pair_coeff * * airebo/morse 2 CH.airebo-m NULL C NULL
+pair_coeff * * tersoff  SiC.tersoff NULL NULL C
+pair_coeff 1 2 lj/cut 0.0239 2.5 
+pair_coeff 2 3 morse 6.0585 5.11 2.522 2.5
+pair_coeff 1 3 morse 6.0585 5.11 2.522 2.5
+##---------------------SETTINGS-------------------------
+timestep 0.001
+
+compute 1  sheet property/atom z vz fz
+
+compute 2 sheet reduce sum c_1[1] c_1[2] c_1[3]
+
+compute 12 impactor ke
+compute 13 impactor pe/atom
+
+compute 14 sheet ke
+compute 15 sheet pe/atom
+
+compute 22 impactor reduce sum c_13 #pe of impactor
+compute 23 sheet reduce sum c_15    #pe of sheet
+
+variable ke_impactor equal c_12
+variable pe_impactor equal c_22
+
+variable ke_sheet equal c_14
+variable pe_sheet equal c_23
+
+variable istep equal step
+#variable peng equal pe
+#variable keng equal ke
+#variable tote equal etotal
+#variable temp equal temp
+#variable Pr equal press 
+
+variable       Dist_bull_x equal xcm(impactor,x)
+variable       Dist_bull_y equal xcm(impactor,y)
+variable       Dist_bull_z equal xcm(impactor,z)
+variable       Velocity_bull_x equal vcm(impactor,x)
+variable       Velocity_bull_y equal vcm(impactor,y)
+variable       Velocity_bull_z equal vcm(impactor,z)
+
+variable       Dist_sheet_z equal xcm(sheet,z)
+
+variable  Lx equal lx
+variable  Ly equal ly
+variable  Lz equal lz
+variable  thickn equal 6.8
+
+##------------------------MINIMIZATION----------------------
+
+fix t_berend all temp/berendsen ${T} ${T} 0.1
+
+fix nve all nve
+
+thermo   10
+thermo_style custom step temp pe ke lx ly vol 
+
+dump 1 all cfg 2000 dump.minimize_*.cfg mass type xs ys zs vx vy vz fx fy fz 
+
+
+run 20000
+
+undump 1
+unfix t_berend
+unfix nve
+
+##-------excite-------
+reset_timestep 0
+
+fix        5 impactor rigid single
+
+fix nve all nve
+
+velocity impactor set NULL NULL v_vi sum yes units box   #20 A/ps = 2 km/s
+
+dump 1 all cfg 100 dump.impact_*.cfg mass type xs ys zs vx vy vz fx fy fz
+
+fix 6 all print 100 "${istep} ${Dist_bull_z} ${Velocity_bull_z}" file bullet_z_v_data.txt screen no
+
+fix data_impactor impactor print 100 "${istep} ${pe_impactor} ${ke_impactor}" file output_data_bball.txt screen no
+
+
+run 15000
+undump 1
+unfix nve
+unfix 5
+unfix 6
+unfix data_impactor
+
+
+##---------Vibration---------
+
+reset_timestep 0
+
+delete_atoms group  impactor
+
+fix nve all nve
+
+fix data_sheet sheet print 100 "${istep},${pe_sheet},${ke_sheet}" file vibration_data_gs.txt screen no
+
+
+fix 	8 sheet ave/time 1 10 100 c_2[1] c_2[2] c_2[3] file atom_attributes.txt
+
+
+
+thermo   100
+thermo_style custom step temp pe ke lx ly vol
+
+
+dump   mydump all cfg 100 dump.vibrate_*.cfg mass type xs ys zs vx vy vz fx fy fz 
+
+
+run 250000
+
+
+print "Job's done" 
