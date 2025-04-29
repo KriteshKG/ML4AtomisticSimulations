@@ -1,0 +1,137 @@
+# Input for graphene sheet
+variable T equal 346.7575274		
+variable srate1 equal 0.001004606
+#----------------------Initialization--------------------
+
+units                 metal
+dimension             3
+boundary              p  p  p
+atom_style            atomic
+newton                on
+
+#------------------Atom Definition-----------------------
+# geometry
+
+read_data	 data_perfect.xyz
+
+
+##---------------- Tersoff----------------------
+
+pair_style tersoff
+pair_coeff * * SiC.tersoff C 
+
+##---------------------SETTINGS-------------------------
+timestep 0.001
+variable  ts equal 0.001
+
+# ================Define groups============================
+
+#left edge
+region   1  block INF 5.0 INF INF INF INF units box
+group left  region 1
+#right edge
+region   2   block 67.0 INF INF INF INF INF units box
+group right  region 2
+
+
+#hold the two ends of the sheet
+
+fix             1 left setforce 0.0 NULL 0.0
+velocity        left set 0.0 NULL 0.0 units box
+
+fix             2 right setforce 0.0 NULL 0.0
+velocity        right set 0.0 NULL 0.0 units box
+
+##---------------------COMPUTES-------------------------
+
+compute  1 all stress/atom NULL virial
+compute  2 all reduce sum c_1[1] c_1[2]
+compute eng all pe/atom 
+compute eatoms all reduce sum c_eng
+
+variable  Lx equal lx
+variable  Ly equal ly
+variable  Lz equal lz
+variable  thickn equal 3.4
+variable  Vol equal v_Lx*v_Ly*v_thickn
+
+##------------------------MINIMIZATION----------------------
+reset_timestep 0
+
+fix 3 all box/relax iso 0.0 vmax 0.001
+ 
+min_style cg 
+minimize 1e-25 1e-25 10000 100000 
+
+variable natoms equal 2040 
+variable teng equal "c_eatoms"
+variable ecoh equal "v_teng/v_natoms"
+
+
+thermo   1000
+thermo_style custom step temp pe ke lx ly vol
+
+#dump 1 all cfg 7000 dump.minimize_*.cfg mass type xs ys zs vx vy vz fx fy fz 
+
+fix 8 all print 100 "${ecoh}" file minimize.txt
+
+
+#undump 1
+
+##------------------------RELAXATION----------------------
+
+fix  4 all npt temp ${T} ${T} 0.1 iso 0.0 0.0 1.0
+
+#dump 2 all cfg 10000 dump.relax_*.cfg mass type xs ys zs vx vy vz fx fy fz 
+
+run  50000
+#undump 2
+
+#--------------------Storing Initial length-------------------
+
+variable        tmp equal "lx"
+variable        Lo equal ${tmp}
+print "Initial Length, Lo: ${Lo}"
+
+#---------------------Deformation--------------------#
+unfix  3
+unfix  4
+reset_timestep 0
+
+fix  3 all npt temp ${T} ${T} 0.1 y 0.0 0.0 1
+
+fix  4 all ave/time 1 100 100 c_2[1] c_2[2]
+
+fix  5 all ave/time 1 100 100 v_Lx v_Ly v_Lz v_Vol
+
+#variable  srate equal 1.0e9
+#variable  srate1 equal "v_srate/1.0e12"
+variable       strainx equal "(lx-v_Lo)/v_Lo"
+
+fix  6 all deform 1 x erate ${srate1} units box remap x
+
+
+##------------------THERMO OUTPUTS------------------#
+
+variable  vv equal  v_Vol*(1+v_strainx)
+variable f equal 1.01325*1e-4
+variable  sigmaxx equal f_4[1]*v_f/v_vv
+variable  sigmayy equal f_4[2]*v_f/v_vv
+variable C11 equal (v_sigmaxx)/(v_strainx)
+variable C12 equal  (v_sigmayy)/(v_strainx)
+variable E equal  (v_C11*v_C11-v_C12*v_C12)/(v_C11)
+variable mu equal (v_C12)/(v_C11)
+
+thermo  1000
+thermo_style custom step temp v_strainx v_sigmaxx v_sigmayy pe ke lx ly vol
+
+
+dump   mydump all cfg 50000 dump.tensile_*.cfg mass type xs ys zs vx vy vz fx fy fz
+dump_modify     mydump element C 
+
+
+fix 7 all print 100 "${strainx} ${sigmaxx} ${C11} ${C12} ${E}" file final.txt
+
+
+run		400000
+
